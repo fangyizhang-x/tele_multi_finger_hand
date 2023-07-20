@@ -1,0 +1,9 @@
+#,#Comment/Framename,#Wrot ID31/41,#Wr.Flex ID 33/43,#Wr.Adduc ID 32/42,#Th Adduc ID/34/44,#Th.Flex ID35/45,#Index Flex ID36/46,#Middle Flex ID 37/47,#Little Fs FlexionID 38/48,#TimeWait (ms)
+K,Neutral Position,2048,1000,2048,0,0,0,0,0,500
+,,,,,,,,,,0
+K,Rotate Wrist,2048,1600,2048,0,0,0,0,0,500
+,,,,,,,,,,0
+K,Neutral Position,2048,1000,2048,0,0,0,0,0,500
+K,Rotate Wrist,2048,1600,2048,0,0,0,0,0,500
+,,,,,,,,,,0
+K,Neutral Position,2048,1000,2048,0,0,0,0,0,500

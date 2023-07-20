@@ -1,0 +1,386 @@
+#!/usr/bin/env python3
+
+# NOTICE : This sample is the same as the user_sample 7, but with one more threshold than the current, which is the threshold force value mesured by the fingertips sensors
+
+# This sample is done for a RH8D Right Hand
+# You can adapt it to a right Hand by changing the 'l' by a 'r' on joint names, and changing the R_ prefixes to ROS Topics by L_ prefixes
+# User sample code High Level Logic : When an object is close to the Hand, the fingers close to grab the object. Once it's grabbed, the finger open themselves 5seconds later
+# Several things are done here :
+# - Get real-time data for each joint
+# - Get real-time data from the IR sensor in the palm of the hand
+# - Get real-time data from the fingertips pressure sensors
+# - Send the instruction to close the index, the ring and the little fingers
+# - Send the instruction to close the thumb
+# - Continuously checking if any joint is too stressed, i.e. if its current goes above the current limit hardcoded to 300mA
+# - Continuously checking if any fingertip sensor goes past the hardcoded force limit set to 1000mN
+# - If a joint is too stressed, send an instruction to set its target position to its present position
+# - When every joint have their present position equal to their target position -> open the finger and let the object go
+
+
+# sudo vim /sys/bus/usb-serial/devices/ttyUSB0/latency_timer
+# roslaunch seed_robotics RH8D_R.launch
+
+
+import rospy
+import std_msgs.msg
+from seed_robotics.msg import *
+from sensor_pkg.msg import *
+import time
+import csv
+# from armer import *
+
+# Hardcoded value of the current limit, if a joint goes above that limit it must stop forcing
+# CURRENT_LIMIT = 300 #mAmp
+# Hardcoded value of the fingertip sensor limit, if a joint goes above that limit it must stop forcing
+SENSOR_FORCE_TOLERANCE = 50 #mN
+SENSOR_FORCE_TARGET = 200 #mN
+TIME_DELAY       = 0.02 #seconds
+POSITION_CHANGE  = 1
+
+ACCEPTABLE_HIGH = SENSOR_FORCE_TARGET + SENSOR_FORCE_TOLERANCE
+ACCEPTABLE_LOW  = SENSOR_FORCE_TARGET - SENSOR_FORCE_TOLERANCE
+# Control class to be able to change the IR sensor value in the callback function
+# Including 2 flags to control the main loop
+class Control:
+    def __init__(self):
+        self.IR_sensor_value = 254
+        self.start_flag      = False
+        self.step2_flag      = False
+
+
+# Initialize an instance of the Control class
+control = Control()
+
+
+# Initialize variables to contunuisly store to incoming informations
+joint_list = [LoneJoint() for i in range (8)] # We will only need informations about 5 joints : r_th_adduction, r_th_flexion, r_ix_flexion, r_middle_flexion, r_ring_ltl_flexion
+sensor_list = []                              # Init a list that will be filled with lone_sensor messages
+camera_hand = mediapipe()
+
+# Initialize variables and structures to send messages
+names_step_1            = ['r_th_adduction','r_ix_flexion','r_middle_flexion','r_ring_ltl_flexion']# Name of the joints we want to move first
+target_positions_step_1 = [4095, 4095, 4095, 4095] # Maximum position value : closed position
+target_speeds_step_1    = [50, 50, 50, 50]  # Speed 0 : Highest speed. Speed 50 : Low speed
+
+names_step_2            = ['r_th_flexion']# Name of the joint to move on the 2nd step of the hand closing
+target_positions_step_2 = [4095] # Maximum position value : closed position
+target_speeds_step_2    = [50] # Speed 50 : Low speed
+
+names_open            = ['r_th_adduction','r_th_flexion','r_ix_flexion','r_middle_flexion','r_ring_ltl_flexion'] # Names of all the joints to move. Step 3 will be to open each finger
+target_positions_open = [0, 0, 0, 0, 0] # Minimum position value : open position
+target_speeds_open    = [50, 50, 50, 50, 50] # Speed 10 : very low speed
+
+names_close            = ['r_th_adduction','r_th_flexion','r_ix_flexion','r_middle_flexion','r_ring_ltl_flexion'] # Names of all the joints to move. Step 3 will be to open each finger
+target_positions_close = [4000, 4000, 4000, 4000, 4000] # Minimum position value : closed position
+target_speeds_close    = [50, 50, 50, 50, 50] # Speed 10 : very low speed
+
+# Define a function to get joint's name from its fingertip sensor ID
+# The mapping is the following :
+# ID = 0 -> thumb flexion
+# ID = 1 -> index flexion
+# ID = 2 -> middle finger flexion
+# ID = 3 or 4 -> ring and little finger flexion (3 is on the ring finger, 4 is on the little finger)
+# Here, all joints are mapped to left hand joints, don't forget to check if you are using a right or a left hand
+# Note that you have information about the hand polarity in the AllSensors messages
+def getNameFromSensorID(id):
+    if id == 0:
+        return 'r_th_flexion'
+    elif id == 1:
+        return 'r_ix_flexion'
+    elif id == 2:
+        return 'r_middle_flexion'
+    elif id == 3 or id == 4:
+        return 'r_ring_ltl_flexion'
+    else:
+        rospy.logwarn("Couldn't match sensor ID %d with its joint, joint name set to 'None'" % id)
+        return 'None'
+
+# Define a function to fill the message 'final_message' to send based on lists of names, target position values and target speed values
+def buildSpeedPosMsg(names,target_positions):
+    # Initialize a list of JointSetSpeedPos messages, the length of the number of joints we want to send instruction to
+    joint_list_msg = [JointSetSpeedPos() for i in range(len(names))]
+    # Fill up that list with the informations about name, position and speed that are listed above
+    for name, position, joint in zip(names, target_positions, joint_list_msg):
+        joint.name = name
+        joint.target_pos = position
+        joint.target_speed = 50
+    # Declare, fill up and return an instance of JointListSetSpeedPos message, ready to be sent
+    final_message = JointListSetSpeedPos()
+    final_message.joints = joint_list_msg
+    pub.publish(final_message)
+    # print(final_message)
+    return
+
+# Callback function called when a AllJoints message is published.
+# Will fill up the joint_list with each LoneJoint messages that are received that interests us. (i.e thumb adduction, thumb flexion, index flexion and ring/little flexion)
+def jointsCallback(joints_data):
+    for joint in joints_data.joints:
+        if joint.name == 'r_w_rotation':
+            joint_list[0] = joint
+        if joint.name == 'r_w_adduction':
+            joint_list[1] = joint
+        if joint.name == 'r_w_flexion':
+            joint_list[2] = joint
+        # control the fingers below
+        if joint.name == 'r_th_adduction':
+            joint_list[3] = joint
+        if joint.name == 'r_th_flexion':
+            joint_list[4] = joint
+        if joint.name == 'r_ix_flexion':
+            joint_list[5] = joint
+        if joint.name == 'r_middle_flexion':
+            joint_list[6] = joint
+        if joint.name == 'r_ring_ltl_flexion':
+            joint_list[7] = joint
+        '''
+        Number of joints : 8
+        Joint name : r_w_rotation
+        Joint ID : 31
+        Joint name : r_w_adduction
+        Joint ID : 32
+        Joint name : r_w_flexion
+        Joint ID : 33
+        Joint name : r_th_adduction
+        Joint ID : 34
+        Joint name : r_th_flexion
+        Joint ID : 35
+        Joint name : r_ix_flexion
+        Joint ID : 36
+        Joint name : r_middle_flexion
+        Joint ID : 37
+        Joint name : r_ring_ltl_flexion
+        Joint ID : 38
+        '''
+
+# Callback function called when a message about the main board is published
+# Will update the value of the palm IR sensor
+def mainBoardCallback(main_board_data):
+    for board in main_board_data.boards :
+        if board.id == 30:
+            control.IR_sensor_value = board.palm_IR_sensor
+    #print("IR Sensor value = %d" % IR_sensor_value)
+
+# Callback function called when a AllSensor message is published
+# Update the values in the sensor_list of lone_sensor messages
+def sensorCallback(sensor_data):
+    # If the list is empty : fill it
+    if len(sensor_list) == 0:
+        for sensor in sensor_data.data:
+            sensor_list.append(sensor)
+    # Else : update the list with the new values
+    else:
+        for index, sensor in enumerate(sensor_data.data):
+            sensor_list[index] = sensor
+
+
+names_all_close            = ['r_th_flexion','r_ix_flexion','r_middle_flexion','r_ring_ltl_flexion']
+target_positions_all_close = [2000, 2000, 2000, 2000]
+names_all_open           = ['r_th_flexion','r_ix_flexion','r_middle_flexion','r_ring_ltl_flexion']
+target_positions_all_open = [0, 0, 0, 0]
+
+names_close1          = ['r_th_flexion']
+target_positions_close1 = [2000]
+names_open1          = ['r_th_flexion']
+target_positions_open1 = [0]
+
+names_close2          = ['r_ix_flexion']
+target_positions_close2 = [2000]
+names_open2          = ['r_ix_flexion']
+target_positions_open2 = [0]
+
+names_close3          = ['r_middle_flexion']
+target_positions_close3 = [2000]
+names_open3          = ['r_middle_flexion']
+target_positions_open3 = [0]
+
+names_close4          = ['r_ring_ltl_flexion']
+target_positions_close4 = [2000]
+names_open4          = ['r_ring_ltl_flexion']
+target_positions_open4 = [0]
+
+joint_name= ['r_th_flexion','r_ix_flexion','r_middle_flexion','r_ring_ltl_flexion']
+joint_position = [0,0,0,0]
+
+
+def cameraCallback(msgs):
+    # print('thumb_curvature', msgs.thumb_curvature)
+    # print('index_curvature', msgs.index_curvature)
+    # print('middle_curvature', msgs.middle_curvature)
+    # print('ring_ltl_curvature', msgs.ring_ltl_curvature)
+    # if  camera_hand.thumb_curvature > 500:
+    #     buildSpeedPosMsg(names_close1,target_positions_close1)
+    # else:
+    #     buildSpeedPosMsg(names_open1,target_positions_open1)
+
+    # if camera_hand.index_curvature > 500:
+    #     buildSpeedPosMsg(names_close2,target_positions_close2)
+    # else:
+    #     buildSpeedPosMsg(names_open2,target_positions_open2)
+
+    # if camera_hand.middle_curvature > 500:
+    #     buildSpeedPosMsg(names_close3,target_positions_close3)
+    # else:
+    #     buildSpeedPosMsg(names_open3,target_positions_open3)
+
+    # if camera_hand.ring_ltl_curvature > 500:
+    #     buildSpeedPosMsg(names_close4,target_positions_close4) 
+    # else:
+    #     buildSpeedPosMsg(names_open4,target_positions_open4)
+    if msgs.thumb_curvature > 3000:
+        joint_position[0] = 2000
+    else:
+        joint_position[0] = 0
+
+    if msgs.index_curvature > 1000:
+        joint_position[1] = 3000
+    else:
+        joint_position[1] = 0
+
+    if msgs.middle_curvature > 1000:
+        joint_position[2] = 3000
+    else:
+        joint_position[2] = 0
+
+    if msgs.ring_ltl_curvature > 1000:
+        joint_position[3] = 3000
+    else:
+        joint_position[3] = 0
+
+    buildSpeedPosMsg(joint_name,joint_position)
+
+# Initialize a ROS Node
+rospy.init_node('Joint_listener', anonymous = False)
+# Subscribe to the Joints Topic to receive AllJoints messages that will be processed by the jointsCallback function
+# Note that the Topic name MUST be 'Joints'
+# rospy.Subscriber("R_Joints", AllJoints, jointsCallback)
+# # Subscribe to the Main_Boards Topic to receive AllMainBoards messages that will be processed by the mainBoardCallback function
+# # Note that the Topic name MUST be 'Main_Boards'
+# rospy.Subscriber('R_Main_Boards', AllMainBoards, mainBoardCallback)
+# # Subscribe to the AllSensors Topic to receive AllSensors messages that will be processed by the sensorCallback function
+# # Note that the Topic name MUST be 'AllSensors'
+# rospy.Subscriber('R_AllSensors',AllSensors,sensorCallback)
+# # Initialize a Publisher to the 'speed_position' Topic. This MUST be the name of the topic so that the data can be processed
+
+rospy.Subscriber('mediapipe_hand_topic', MediaPipe, cameraCallback)
+# # Initialize a Publisher to the 'speed_position' Topic. This MUST be the name of the topic so that the data can be processed
+
+# The publisher will publish JointListSetSpeedPos messages
+pub = rospy.Publisher('R_speed_position', JointListSetSpeedPos, queue_size = 10)
+
+# # Initialize an instance of the 'Frank Emika Panda' armer control class
+# gbc = GentleBenchmarkController()
+
+# Define a function that takes a LoneJoint message instance in argument
+# It will publish a message to that joint to set its target position to its present position
+# The idea is to stop stressing the joint
+def stopStressing(joint):
+    # Getting the joint's present position
+    target_pos = joint.present_position
+    # Declare a list of 1 JointSetSpeedPos element
+    joints = [JointSetSpeedPos()]
+    # Fill the JointSetSpeedPos instance with joint's name, new target position and target_speed
+    joints[0].name = joint.name
+    joints[0].target_pos = target_pos
+    joints[0].target_speed = -1         # If targert speed = -1, then the parameter will be ignored
+    # Declare an instance of JointListSetSpeedPos that will be the message to send
+    message = JointListSetSpeedPos()
+    # Fill that message and publish it
+    message.joints = joints
+    pub.publish(message)
+
+def decreaseStress(joint,pos_change):
+    # Getting the joint's present position
+    if joint.present_position < 201:
+        print("Trying to decrease pos on joint %s that already has present position to %d" % (joint.name,joint.present_position))
+        return
+    target_pos = joint.present_position - pos_change
+    # Declare a list of 1 JointSetSpeedPos element
+    joints = [JointSetSpeedPos()]
+    # Fill the JointSetSpeedPos instance with joint's name, new target position and target_speed
+    joints[0].name = joint.name
+    joints[0].target_pos = target_pos
+    joints[0].target_speed = -1  # If targert speed = -1, then the parameter will be ignored
+    # Declare an instance of JointListSetSpeedPos that will be the message to send
+    message = JointListSetSpeedPos()
+    # Fill that message and publish it
+    message.joints = joints
+    pub.publish(message)
+
+def increaseStress(joint,pos_change):
+    # Getting the joint's present position
+    if joint.present_position > 3894:
+        list_joints_too_far.append(joint.name)
+        print("Trying to increase pos on joint %s that already has present position to %d" % (joint.name,joint.present_position))
+        return
+    target_pos = joint.present_position + pos_change
+    # Declare a list of 1 JointSetSpeedPos element
+    joints = [JointSetSpeedPos()]
+    # Fill the JointSetSpeedPos instance with joint's name, new target position and target_speed
+    joints[0].name = joint.name
+    joints[0].target_pos = target_pos
+    joints[0].target_speed = -1  # If targert speed = -1, then the parameter will be ignored
+    # Declare an instance of JointListSetSpeedPos that will be the message to send
+    message = JointListSetSpeedPos()
+    # Fill that message and publish it
+    message.joints = joints
+    pub.publish(message)
+
+def computeGain(abs_val):
+    gain = int(abs(abs_val - SENSOR_FORCE_TARGET))
+    if gain > 200:
+        return 200
+    else:
+        return gain
+
+
+def demoTestJoints():
+    # Initialize variables and structures to send messages
+    # Declaring a list to store the names of the joints we want to send command to
+    joint_names = ['r_w_rotation','r_w_adduction','r_w_flexion','r_th_adduction','r_th_flexion','r_ix_flexion','r_middle_flexion','r_ring_ltl_flexion']
+    # Declaring a list to be filled with the target positions read
+    target_position_list = []
+
+    # Open and read the csv file with the list of commands
+    # with open('src/seed_robotics/user_samples/KEYFRAMES_IROS2019_RH8Donly.csv', 'r') as csv_file:
+    with open('/home/tactile/rh8d_robot_hand/src/seed_robotics/user_samples/demo_handshake_20230217.csv', 'r') as csv_file:
+    # with open('KEYFRAMES_IROS2019_RH8Donly.csv', 'r') as csv_file:
+        reader = csv.reader(csv_file)
+        # Go through each line in the csv file
+        for row in reader:
+            # Clear the target position list between each iteration
+            target_position_list.clear()
+            print(row)
+            # If a line doesn't start with a 'K' ignore it
+            if row[0] == 'K':
+                for i in range(2,len(row)):
+                    # Last element is the time to wait between each send
+                    if i == 10:
+                        wait_ms = row[i]
+                    else:
+                        # Every other one is a target position
+                        target_position_list.append(int(row[i]))
+                print(target_position_list)
+                print('------------------------------------------------------------------------------')
+                buildSpeedPosMsg(joint_names,target_position_list)
+                time_sleep_s = int(wait_ms) * 0.001
+                time.sleep(time_sleep_s)
+        csv_file.close()
+
+
+
+# Declaring a empty list to store future stressed joints
+list_joints_too_far = []
+
+# Sleeping for 1sec to let ROS initialize
+time.sleep(1)
+counter = 0 # count the times (check each sensor's value to see if the value is equal to the threshold), ACCEPTABLE_LOW  = SENSOR_FORCE_TARGET - SENSOR_FORCE_TOLERANCE= 150mN
+timer_waiting = 0 # control the speed of printing '>>> Waiting for handshake......'
+handshake_flag = True # control the handshake while loop
+
+
+# Main Loop------------------------------------------------------------------------------------------
+while not rospy.is_shutdown():
+    print('>>>', joint_position)
+    time.sleep(0.5)
+# end of Main loop-----------------------------------------------------------------------------------
+    

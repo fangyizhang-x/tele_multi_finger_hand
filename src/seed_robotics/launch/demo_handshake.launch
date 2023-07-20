@@ -1,0 +1,4 @@
+<launch>
+    <node pkg="seed_robotics" name="demo_handshake_20230220" type="demo_handshake_20230220.py" output="screen">
+    </node>
+</launch>

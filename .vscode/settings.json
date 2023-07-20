@@ -1,0 +1,17 @@
+{
+  "python.autoComplete.extraPaths": [
+    "/home/tactile/rh8d_seed_robot_hand/devel/lib/python3/dist-packages",
+    "/home/tactile/rh8d_robot_hand/devel/lib/python3/dist-packages",
+    "/opt/ros/noetic/lib/python3/dist-packages"
+  ],
+  "python.analysis.extraPaths": [
+    "/home/tactile/rh8d_seed_robot_hand/devel/lib/python3/dist-packages",
+    "/home/tactile/rh8d_robot_hand/devel/lib/python3/dist-packages",
+    "/opt/ros/noetic/lib/python3/dist-packages"
+  ],
+  "cmake.sourceDirectory": "${workspaceFolder}/src/dynamixel_sdk",
+  "[python]": {
+    "editor.defaultFormatter": "ms-python.black-formatter"
+  },
+  "python.formatting.provider": "none"
+}
