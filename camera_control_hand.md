@@ -1,4 +1,4 @@
-## Demo code: 2D USB Camera to control the RH8D Robot Hand (hand)
+## Demo code: Control RH8D Robot Hand (hand) with 2D USB Camera
 
 ##### demo code path: /seed_robotics/camera_control_hand_demo
 
