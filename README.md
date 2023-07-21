@@ -1,20 +1,18 @@
 ## Statement
 
-#### part 1: by using USB Camera to control the `RH8D Robot Hand(hand)` via `MediaPipe` library.
+#### part 1: Teleoperation of the `Seed Robotics RH8D Hand` with vision-based hand tracking using `MediaPipe`.
 
-##### (based on `RH8D Robot Hand drive` and `MediaPipe`)
+##### (This package integrates the `RH8D Robot Hand ROS drive` and `MediaPipe`.)
 
 #### 1.1 `MediaPipe` https://developers.google.com/mediapipe/solutions/vision/hand_landmarker/python
 
 #### 1.2 `RH8D Robot Hand drive` https://github.com/seedrobotics/ros_robothands/tree/main
 
-#### 1.3 code can be found in`/seed_robotics/camera_control_hand_demo`
+#### 1.3 The demo code can be found in `/seed_robotics/camera_control_hand_demo`.
 
-#### 1.4 how to use the code refer to `camera_control_hand.md`
+#### 1.4 Please refer to `camera_control_hand.md` for use details.
 
-#### part 2: original .md file
-
-original code: https://github.com/seedrobotics/ros_robothands/tree/main
+#### part 2: Following is the readme from the original Robot Hand ROS Driver at: https://github.com/seedrobotics/ros_robothands/tree/main
 #################### ROS_ROBOTHANDS ####################
 ########################################################
 
