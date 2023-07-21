@@ -8,7 +8,7 @@
 
 #### 1.2 `RH8D Robot Hand drive`: https://github.com/seedrobotics/ros_robothands/tree/main.
 
-#### 1.3 The demo code can be found in `/seed_robotics/camera_control_hand_demo`.
+#### 1.3 The demo code can be found in `src/seed_robotics/camera_control_hand_demo`.
 
 #### 1.4 Please refer to `camera_control_hand.md` for use details.
 
