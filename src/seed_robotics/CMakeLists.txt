@@ -173,9 +173,9 @@ include_directories(
  catkin_install_python(PROGRAMS
    scripts/hand_handle_node.py
    #--------------------------------------------
-   cameraTohandFile/camera_control_hand_demo_24Mar.py
-   cameraTohandFile/draw_seed_hand.py
-   cameraTohandFile/mediapipe_v4_30Mar.py
+   camera_control_hand_demo/camera_control_hand_demo_24Mar.py
+   camera_control_hand_demo/draw_seed_hand.py
+   camera_control_hand_demo/mediapipe_v4_30Mar.py
    #--------------------------------------------
    user_samples/user_sample_1_get_values.py
    user_samples/user_sample_2_set_speed_position.py
